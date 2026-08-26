@@ -1,0 +1,8 @@
+[Unit]
+Description=Restic backup of docker stacks to Jottacloud
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/homelab-backup.sh

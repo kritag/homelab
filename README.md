@@ -228,6 +228,9 @@ Two things that cost me time:
 
 ## Backups
 
-Not in this repo. `restic` to Jottacloud via `rclone`, nightly, stopping both stacks first so
-the SQLite databases are consistent. Covers both home directories: compose files, `.env`, VPN
-configs, nginx config, and all service appdata.
+See [`backup/`](backup/) — nightly `restic` to Jottacloud via `rclone`, stopping both stacks
+first so the SQLite databases are consistent. Covers both home directories: compose files,
+`.env`, VPN configs, nginx config, and all service appdata. Media libraries are not backed up.
+
+Anything not in this repo — nginx config, `.env`, Home Assistant's `config/` — comes from
+there.
