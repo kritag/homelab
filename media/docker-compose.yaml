@@ -1,0 +1,242 @@
+services:
+  bazarr:
+    container_name: bazarr
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    image: lscr.io/linuxserver/bazarr:latest
+    ports:
+      - 6767:6767
+    restart: unless-stopped
+    volumes:
+      - /home/mediaman/docker-automatic-media-server/bazarr/config:/config
+      - /mnt/1_data/movies:/movies
+      - /mnt/0_data/movies:/movies1
+      - /mnt/0_data/tv:/tv
+  cleanuparr:
+    container_name: cleanuparr
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    image: ghcr.io/cleanuparr/cleanuparr:latest
+    ports:
+      - 11011:11011
+    restart: unless-stopped
+    volumes:
+      - /home/mediaman/docker-automatic-media-server/cleanuparr/config:/config
+  deluge:
+    # Modprobe ip_tables to get it to work
+    devices:
+      - /dev/net/tun
+    cap_add:
+      - NET_ADMIN
+    container_name: deluge
+    env_file: .env
+    environment:
+      - DEBUG=${DEBUG}
+      - ENABLE_PRIVOXY=${ENABLE_PRIVOXY}
+      - LAN_NETWORK=${LAN_NETWORK}
+      - NAME_SERVERS=${NAME_SERVERS}
+      - PGID=${PGID}
+      - PUID=${PUID}
+      - STRICT_PORT_FORWARD=${STRICT_PORT_FORWARD}
+      - STRONG_CERTS=${STRONG_CERTS}
+      - TZ=${TZ}
+      - VPN_ENABLED=${VPN_ENABLED}
+      - VPN_CLIENT=${VPN_CLIENT}
+      - VPN_PASS=${VPN_PASS}
+      - VPN_PROV=${VPN_PROV}
+      - VPN_USER=${VPN_USER}
+    image: binhex/arch-delugevpn:latest
+    ports:
+      - 8112:8112
+      - 8118:8118
+      - 58846:58846
+      - 58946:58946
+    restart: unless-stopped
+    volumes:
+      - /home/mediaman/docker-automatic-media-server/deluge/config:/config
+      - /mnt/0_data/torrents/downloads:/downloads
+      - /mnt/1_data/torrents/downloads:/movie
+      - /etc/localtime:/etc/localtime:ro
+  emby:
+    container_name: emby
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    image: lscr.io/linuxserver/emby:latest
+    ports:
+      - 8920:8920/tcp
+      - 8097:8096/tcp
+    restart: unless-stopped
+    volumes:
+      - /home/mediaman/docker-automatic-media-server/emby/config:/config
+      - /mnt/0_data/tv:/data/tv
+      - /mnt/1_data/movies:/data/movies
+      - /mnt/0_data/movies:/data/movies1
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    environment:
+      - LOG_LEVEL=info
+      - LOG_HTML=false
+      - CAPTCHA_SOLVER=none
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    ports:
+      - "${PORT:-8191}:8191"
+    restart: unless-stopped
+  heimdall:
+    container_name: heimdall
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    image: lscr.io/linuxserver/heimdall:latest
+    ports:
+      - 81:80
+      - 444:443
+    restart: unless-stopped
+    volumes:
+      - /home/mediaman/docker-automatic-media-server/heimdall/config:/config
+  jellyfin:
+    container_name: jellyfin
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    image: lscr.io/linuxserver/jellyfin:latest
+    ports:
+      - 8096:8096
+    restart: unless-stopped
+    volumes:
+      - /home/mediaman/docker-automatic-media-server/jellyfin/config:/config
+      - /mnt/0_data/tv:/data/tv
+      - /mnt/0_data/movies:/data/movies1
+      - /mnt/1_data/movies:/data/movies
+      - /mnt/0_data/mma:/mma
+  plex:
+    container_name: plex
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - VERSION=docker
+        #ports:
+        #  - 32400:32400/tcp
+        #  - 3005:3005/tcp
+        #  - 8324:8324/tcp
+        #  - 32469:32469/tcp
+        #  - 1900:1900/udp
+        #  - 32410:32410/udp
+        #  - 32412:32412/udp
+        #  - 32413:32413/udp
+        #  - 32414:32414/udp
+    image: lscr.io/linuxserver/plex:latest
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - /home/mediaman/docker-automatic-media-server/plex/config:/config
+      - /mnt/1_data/movies:/movies
+      - /mnt/0_data/movies:/movies1
+      - /mnt/0_data/tv:/tv
+        #- /mnt/mybook/video/concerts:/concerts
+        #- /mnt/mybook/video/documentaries:/documentaries
+        #- /mnt/mybook/video/standup:/standup
+      - /mnt/0_data/mma:/mma
+  portainer:
+    container_name: portainer
+    environment:
+      - TZ=${TZ}
+    image: portainer/portainer-ce:latest
+    ports:
+      - 9000:9000
+    privileged: true
+    restart: always
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /home/mediaman/docker-automatic-media-server/portainer/data:/data
+      - /home/mediaman/docker-automatic-media-server/portainer/shared:/shared
+  prowlarr:
+    container_name: prowlarr
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    image: lscr.io/linuxserver/prowlarr:latest
+    ports:
+      - 9696:9696
+
+    restart: unless-stopped
+    volumes:
+      - /home/mediaman/docker-automatic-media-server/prowlarr/config:/config
+  radarr:
+    container_name: radarr
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    image: lscr.io/linuxserver/radarr:latest
+    ports:
+      - 7878:7878
+    restart: unless-stopped
+    volumes:
+      - /home/mediaman/docker-automatic-media-server/radarr/config:/config
+      - /mnt/1_data/movies:/movies
+      - /mnt/0_data/movies:/movies1
+      - /mnt/0_data/torrents/downloads:/downloads
+  recyclarr:
+    image: ghcr.io/recyclarr/recyclarr:8
+    container_name: recyclarr
+    init: true
+    user: "${PUID}:${PGID}"
+    environment:
+      - RADARR_API_KEY=${RADARR_API_KEY}
+      - SONARR_API_KEY=${SONARR_API_KEY}
+      - TZ=${TZ}
+    volumes:
+      - /home/mediaman/docker-automatic-media-server/recyclarr/config:/config
+    restart: unless-stopped
+  reverse:
+    container_name: reverse
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    image: lscr.io/linuxserver/nginx:latest
+    ports:
+      - 80:80
+      - 443:443
+    restart: unless-stopped
+    volumes:
+      - /home/mediaman/docker-automatic-media-server/reverse/config:/config
+  seerr:
+    image: ghcr.io/seerr-team/seerr:latest
+    container_name: seerr
+    init: true
+    user: "${PUID}:${PGID}"
+    environment:
+      - TZ=${TZ}
+    ports:
+      - 5055:5055
+    volumes:
+      - /home/mediaman/docker-automatic-media-server/seerr/config:/app/config
+    restart: unless-stopped
+  sonarr:
+    container_name: sonarr
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    image: lscr.io/linuxserver/sonarr:latest
+    ports:
+      - 8989:8989
+    restart: unless-stopped
+    volumes:
+      - /home/mediaman/docker-automatic-media-server/sonarr/config:/config
+      - /mnt/0_data/tv:/tv
+      - /mnt/0_data/torrents/downloads:/downloads
