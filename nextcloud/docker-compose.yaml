@@ -48,12 +48,14 @@ services:
       OVERWRITEHOST: nextcloud.saturn.io
       PHP_MEMORY_LIMIT: 1G
       PHP_UPLOAD_LIMIT: 16G
+      OVERWRITECLIURL: http://nextcloud.saturn.io
 
   cron:
     image: nextcloud:34-apache
     container_name: nextcloud-cron
     restart: unless-stopped
     entrypoint: /cron.sh
+    stop_grace_period: 5s
     depends_on:
       db: { condition: service_healthy }
     volumes:
