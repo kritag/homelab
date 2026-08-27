@@ -1,0 +1,61 @@
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: nextcloud-db
+    restart: unless-stopped
+    volumes:
+      - /home/nextcloud/postgres:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: nextcloud
+      POSTGRES_USER: nextcloud
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nextcloud"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: nextcloud-redis
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}"]
+
+  app:
+    image: nextcloud:34-apache
+    container_name: nextcloud
+    restart: unless-stopped
+    depends_on:
+      db: { condition: service_healthy }
+    ports:
+      - "8080:80"
+    volumes:
+      - /home/nextcloud/html:/var/www/html
+      - /mnt/0_data/nextcloud:/var/www/data
+    environment:
+      NEXTCLOUD_DATA_DIR: /var/www/data
+      POSTGRES_HOST: db
+      POSTGRES_DB: nextcloud
+      POSTGRES_USER: nextcloud
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      REDIS_HOST: redis
+      REDIS_HOST_PASSWORD: ${REDIS_PASSWORD}
+      NEXTCLOUD_ADMIN_USER: ${NEXTCLOUD_ADMIN_USER}
+      NEXTCLOUD_ADMIN_PASSWORD: ${NEXTCLOUD_ADMIN_PASSWORD}
+      NEXTCLOUD_TRUSTED_DOMAINS: "nextcloud.saturn.io 192.168.0.62"
+      TRUSTED_PROXIES: "172.16.0.0/12 192.168.0.0/16"
+      OVERWRITEPROTOCOL: http
+      OVERWRITEHOST: nextcloud.saturn.io
+      PHP_MEMORY_LIMIT: 1G
+      PHP_UPLOAD_LIMIT: 16G
+
+  cron:
+    image: nextcloud:34-apache
+    container_name: nextcloud-cron
+    restart: unless-stopped
+    entrypoint: /cron.sh
+    depends_on:
+      db: { condition: service_healthy }
+    volumes:
+      - /home/nextcloud/html:/var/www/html
+      - /mnt/0_data/nextcloud:/var/www/data

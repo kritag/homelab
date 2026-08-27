@@ -11,6 +11,7 @@ Each stack gets its own Unix account, its own compose project, and its own `.env
 |---|---|---|
 | `media/` | `mediaman` | *arr apps, Deluge behind VPN, Jellyfin/Emby/Plex, Heimdall, nginx |
 | `homeassistant/` | `homeassistant` | Home Assistant |
+| `nextcloud/` | `nextcloud` | Nextcloud, PostgreSQL, Redis |
 
 The compose file lives in the user's home directory, so the project directory is `~` and the
 project name is the username. `docker compose` walks up parent directories, so it also works
@@ -57,7 +58,7 @@ Root and `/home` are xfs on LVM (`sda`). Two ext4 data disks carry the media:
 
 | Mount | Device | Role |
 |---|---|---|
-| `/mnt/0_data` | `sdb1` | Bulk storage — tv, movies, mma, torrent downloads |
+| `/mnt/0_data` | `sdb1` | Bulk storage — tv, movies, mma, torrent downloads, Nextcloud user data |
 | `/mnt/1_data` | `sdc1` (label `data`) | Smaller disk, near capacity — movies, torrent downloads |
 
 Mount by UUID, not device name — `/dev/sdX` ordering isn't stable across reboots. Get the
@@ -88,6 +89,9 @@ The ownership must match the media stack's `PUID`/`PGID`, or the containers can 
 but can't write to them — which surfaces as import failures in Sonarr/Radarr rather than an
 obvious permissions error.
 
+Nextcloud is the exception: its directory under `/mnt/0_data` is owned `33:33`, not `2020:2020`
+— see **nextcloud** below. Create it *after* the recursive chown above, or it gets clobbered.
+
 Both disks hold movies because `1_data` filled up and the library spilled onto `0_data`.
 Sonarr/Radarr and the media servers mount both, as `/movies` (1_data) and `/movies1` (0_data).
 Confusing, and worth consolidating onto one disk if capacity ever allows.
@@ -117,6 +121,7 @@ IDs are allocated from 2020 upward, one per stack:
 |---|---|---|
 | `media/` | `mediaman` | 2020:2020 |
 | `homeassistant/` | `homeassistant` | 2021:2021 |
+| `nextcloud/` | `nextcloud` | 2022:2022 |
 
 ```bash
 # media
@@ -129,13 +134,18 @@ sudo groupadd -g 2021 homeassistant
 sudo useradd -m -u 2021 -g 2021 -s /bin/bash homeassistant
 sudo usermod -aG docker homeassistant
 
-id mediaman; id homeassistant      # confirm the numbers
+# nextcloud
+sudo groupadd -g 2022 nextcloud
+sudo useradd -m -u 2022 -g 2022 -s /bin/bash nextcloud
+sudo usermod -aG docker nextcloud
+
+id mediaman; id homeassistant; id nextcloud      # confirm the numbers
 ```
 
 If an ID is already taken, `groupadd`/`useradd` fail rather than silently picking another —
 fix the collision instead of changing the ID.
 
-Next stack gets 2022, and so on. Add it to the table.
+Next stack gets 2023, and so on. Add it to the table.
 
 ### Deploy the stack
 
@@ -176,6 +186,54 @@ HTTP settings — reverse proxy trust, port, URLs — are configured
 in the UI under **Settings → System → Network**. A `http:` block in `configuration.yaml` is
 silently ignored on current versions, so don't waste time there.
 
+### nextcloud
+
+Official `nextcloud:34-apache` plus `postgres:17-alpine`, `redis:7-alpine`, and a fourth
+container running the same image with `entrypoint: /cron.sh` for background jobs. Published on
+host port 8080.
+
+The official image ignores `PUID`/`PGID` — Apache is hardcoded to `www-data` (uid 33). So
+unlike the media stack, the data directories are chowned `33:33`, and the 2022 user owns only
+the home directory and runs `docker compose`. This is the tradeoff for env-var-driven install:
+the admin account and database wiring live in the compose file, so the stack rebuilds
+unattended. `linuxserver/nextcloud` honours 2022 and tracks upstream just as closely, but has
+no automated install and serves self-signed HTTPS on 443, which doesn't fit the single
+`proxy_pass http://$upstream` block in the nginx config.
+
+User data lives on the bulk disk, not in the home directory — `/home` is only 76G:
+
+```bash
+sudo mkdir -p /mnt/0_data/nextcloud /home/nextcloud/{html,postgres}
+sudo chown 33:33 /mnt/0_data/nextcloud /home/nextcloud/html
+sudo chown 2022:2022 /home/nextcloud
+```
+
+`NEXTCLOUD_DATA_DIR=/var/www/data` points the instance at the bind mount. There is no bind
+mount into `/home/nextcloud/data` — the real path is referenced directly.
+
+No TLS: access is over WireGuard, so the tunnel already encrypts. `OVERWRITEPROTOCOL=http`.
+The "accessing site insecurely via HTTP" and HSTS setup-check warnings are therefore expected
+and should not be "fixed". The real cost is that copy-to-clipboard and service workers don't
+work in the browser, and passkeys/WebAuthn are unavailable — TOTP is the usable second factor.
+
+Settings covered by a compose environment variable are re-applied by the entrypoint on
+container start and override the web UI. Change those in compose, not in Administration
+settings — this bites hardest with the `SMTP_*` variables, which the upstream docs warn about
+explicitly. Everything else — accounts, groups, quotas, apps, sharing — is stored in
+PostgreSQL and is safe to manage from the UI.
+
+Post-install, with no web equivalent:
+
+```bash
+docker exec -u www-data nextcloud php occ maintenance:repair --include-expensive
+docker exec -u www-data nextcloud php occ config:system:set maintenance_window_start --type=integer --value=21
+docker exec -u www-data nextcloud php occ config:system:set default_phone_region --value=NO
+```
+
+Hour 21 is UTC — 23:00–03:00 local, chosen to clear the 04:00 backup so the heavy daily jobs
+don't fight it for I/O. Set a default quota before anyone connects a phone, or one client
+auto-uploading video can fill `/mnt/0_data` and take the media stack down with it.
+
 ## Filling in `.env`
 
 | Variable | Where it comes from |
@@ -186,6 +244,8 @@ silently ignored on current versions, so don't waste time there.
 | `VPN_PROV` / `VPN_CLIENT` | Provider name, and `openvpn` or `wireguard` |
 | `LAN_NETWORK` | LAN CIDR, e.g. `192.168.0.0/24` — required, or the VPN container blocks LAN access |
 | `RADARR_API_KEY` / `SONARR_API_KEY` | Radarr/Sonarr → Settings → General, after first start |
+| `POSTGRES_PASSWORD` / `REDIS_PASSWORD` | Nextcloud — generate with `openssl rand -base64 24` |
+| `NEXTCLOUD_ADMIN_USER` / `NEXTCLOUD_ADMIN_PASSWORD` | Nextcloud — only read on first install |
 
 ## First-run order
 
@@ -225,12 +285,26 @@ Two things that cost me time:
 - Emby is mapped to host port 8097 to avoid colliding with Jellyfin on 8096.
 - nginx site configs go in `reverse/config/nginx/site-confs/`. Files in `reverse/config/` root
   are not read at all.
+- Nextcloud answers `/` with a 302 to `/login`, so a `curl` without `-L` returns a body with no
+  `<title>` — that's not a failure.
 
 ## Backups
 
-See [`backup/`](backup/) — nightly `restic` to Jottacloud via `rclone`, stopping both stacks
-first so the SQLite databases are consistent. Covers both home directories: compose files,
-`.env`, VPN configs, nginx config, and all service appdata. Media libraries are not backed up.
+See [`backup/`](backup/) — nightly `restic` to Jottacloud via `rclone`, stopping all three
+stacks first so the databases are consistent. Covers all three home directories: compose
+files, `.env`, VPN configs, nginx config, and all service appdata. Media libraries are not
+backed up.
+
+Nextcloud's user data (`/mnt/0_data/nextcloud`) is also excluded: every phone auto-uploads to
+Jottacloud independently, so backing it up would put a second copy of the same photos in the
+same provider. Only `/home/nextcloud` is backed up — PostgreSQL (accounts, groups, quotas,
+shares, file IDs), `config.php` and `.env`, which is the half that can't be reconstructed.
+The tradeoff to be aware of: anything created *directly* in Nextcloud rather than uploaded
+from a phone — laptop uploads, scans, server-side albums — never passes through Jottacloud and
+so has no second copy anywhere.
+
+Stopping the Nextcloud stack gives PostgreSQL a clean shutdown, which is what makes a
+file-level copy of its data directory consistent. No `pg_dump` step is needed.
 
 Anything not in this repo — nginx config, `.env`, Home Assistant's `config/` — comes from
 there. Failures alert via healthchecks.io.
