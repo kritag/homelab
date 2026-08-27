@@ -11,7 +11,8 @@ the provider never sees plaintext.
 
 ## What is and isn't backed up
 
-**In:** `/home/mediaman` and `/home/homeassistant` — compose files, `.env`, VPN provider
+**In:** `/home/mediaman`, `/home/homeassistant`, and `/var/backups/pihole` (weekly Pi-hole
+teleporter exports pulled from the Pi) — compose files, `.env`, VPN provider
 configs, nginx config, and all per-service appdata. That includes the parts that are genuinely
 expensive to lose: the *arr databases, Jellyfin's `data/` (library, users, watch state,
 downloaded subtitles, Intro Skipper fingerprints), Plex's `Plug-in Support/Databases` and
@@ -136,10 +137,33 @@ sudo restic -r rclone:jotta:restic-homelab --password-file /root/.restic-passwor
   check --read-data-subset 5%
 ```
 
-Nothing alerts on failure — a silently broken timer is the most likely way this setup rots, so
-glance at `list-timers` now and then.
+## Alerting
+
+The script pings [healthchecks.io](https://healthchecks.io) — `/start` when it begins, the bare
+URL on success, `/fail` on any error. Healthchecks emails when an expected ping doesn't arrive,
+which is the failure that matters most: the run that never happened because the timer broke or
+the host was off. Plain error-mail can't detect that.
+
+Set it up with a free account, one check named e.g. `homelab-backup`, period 1 day, grace 2
+hours. Then on the host:
+
+```bash
+echo 'https://hc-ping.com/<your-uuid>' | sudo tee /root/.healthchecks-url
+sudo chmod 600 /root/.healthchecks-url
+```
+
+The URL stays out of this repo deliberately — anyone holding it can forge pings and mask a real
+failure. If the file is absent the script runs normally with alerting disabled, so a fresh host
+works before you've set this up.
+
+Test it end to end by faking a failure — pinging `/fail` by hand and confirming the mail lands.
+An alerting path you haven't seen fire is not an alerting path.
 
 ## Not covered
 
-Pi-hole's config on the Raspberry Pi. Rebuilding it is two commands, both documented in the
-top-level README, so this is a deliberate gap rather than an oversight.
+Nothing, currently. The Pi-hole config is included via the nightly teleporter pull — see
+[`../pihole/`](../pihole/).
+
+What's still worth knowing: `prune` is the step most likely to fail on a flaky upload, and if it
+fails repeatedly the repo grows while snapshots look fine. The healthchecks alert catches that
+now, since a failed prune fails the run.

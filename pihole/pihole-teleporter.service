@@ -1,0 +1,6 @@
+[Unit]
+Description=Export Pi-hole configuration with teleporter
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/pihole-teleporter.sh

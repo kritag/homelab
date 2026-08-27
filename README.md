@@ -233,4 +233,7 @@ first so the SQLite databases are consistent. Covers both home directories: comp
 `.env`, VPN configs, nginx config, and all service appdata. Media libraries are not backed up.
 
 Anything not in this repo — nginx config, `.env`, Home Assistant's `config/` — comes from
-there.
+there. Failures alert via healthchecks.io.
+
+Pi-hole's own config is exported nightly and folded into the same repository — see
+[`pihole/`](pihole/).

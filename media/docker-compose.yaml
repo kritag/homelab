@@ -42,7 +42,6 @@ services:
       - PGID=${PGID}
       - PUID=${PUID}
       - STRICT_PORT_FORWARD=${STRICT_PORT_FORWARD}
-      - STRONG_CERTS=${STRONG_CERTS}
       - TZ=${TZ}
       - VPN_ENABLED=${VPN_ENABLED}
       - VPN_CLIENT=${VPN_CLIENT}
