@@ -276,6 +276,65 @@ Two things that cost me time:
 - Pick a suffix whose TLD is in the Public Suffix List. Firefox-based browsers send `.lan` and
   `.internal` to search instead of navigating, and you can't fix that per-device at scale.
 
+### Reaching these names remotely
+
+Remote access is WireGuard on the ASUS router (VPN → VPN Server → WireGuard), not on the
+server. Split tunnel: `AllowedIPs = 192.168.0.0/24,10.6.0.0/24`, endpoint
+`<router-ddns-name>:51820`, clients on `10.6.0.0/24`.
+
+Two changes are needed or `<service>.saturn.io` will not resolve over the tunnel, even though
+`192.168.0.62:<port>` works fine:
+
+**1. Pi-hole must answer the WireGuard subnet.** The router routes VPN clients without NAT, so
+queries arrive from `10.6.0.x` — a foreign subnet — and Pi-hole v6's default `LOCAL` listening
+mode silently drops them:
+
+```bash
+sudo pihole-FTL --config dns.listeningMode ALL
+sudo systemctl restart pihole-FTL
+```
+
+Safe, because the Pi has no port forward — only the LAN and VPN clients can reach it.
+
+The symptom, if this is wrong: from a connected client,
+`curl -o /dev/null -w '%{http_code}' http://192.168.0.59/admin/` returns 302 — so routing is
+fine — but `dig @192.168.0.59 jellyfin.saturn.io` times out.
+
+**2. Each client config must point at Pi-hole.** The router generates `DNS = 10.6.0.1`, which is
+the router itself; it resolves via its own WAN DNS, not Pi-hole, so it answers `*.saturn.io`
+from the real public zone. There is no DNS field on this firmware's WireGuard page, so edit
+every exported config:
+
+```bash
+sed -i 's/^DNS = .*/DNS = 192.168.0.59/' client.conf
+qrencode -t ansiutf8 < client.conf     # scan straight from the terminal
+```
+
+**Only that one address.** Listing a second resolver — `10.6.0.1,192.168.0.59` — gives working
+internet but breaks `*.saturn.io`: the router replies NXDOMAIN, which is a *valid* answer, so
+the client never fails over to Pi-hole. Same reason DHCP's "DNS Server 2" is left empty.
+
+Pointing the router's own **WAN → DNS Server 1** at `192.168.0.59` also works and needs no
+client edits, but it was rejected deliberately: the router would then depend on Pi-hole to
+resolve its own DDNS updates, so a Pi outage during a WAN IP change would kill remote access.
+
+Exported configs contain private keys. They do not belong in this repo.
+
+While connected, Android sends *all* DNS to the tunnel's resolver, so every lookup goes via
+Pi-hole at home — ad blocking follows you around, and if the Pi is down, connected clients have
+no DNS at all.
+
+Testing notes:
+
+- Termux's `dig` ignores the Android system resolver and defaults to `8.8.8.8`, so a bare
+  `dig +short jellyfin.saturn.io` returns nothing even when everything works. Test in a browser,
+  or name the server: `dig @192.168.0.59 jellyfin.saturn.io`.
+- Test from mobile data, never from the home wifi — hairpin NAT gives a misleading result.
+- Android **Private DNS** and browser **DoH** bypass the tunnel's resolver entirely. Both bite
+  here specifically because `saturn.io` is a real registered domain that resolves publicly, so
+  the failure is a confident wrong answer rather than an obvious error.
+~
+
 ## Gotchas
 
 - Verify a proxy by page title, not HTTP status — nginx's default vhost answers 200 with its
