@@ -40,12 +40,36 @@ hc() { [ -n "$HC_URL" ] && curl -fsS -m 10 --retry 3 "${HC_URL}${1}" >/dev/null 
 
 # Bring the stacks back up no matter how we exit — a failed backup must not
 # leave the house without lights — then report the outcome.
+# Bring a stack back up, retrying once. Docker does not always release published
+# ports the instant a container stops, so an immediate `up -d` can fail with
+# "address already in use" — on 2026-09-01 deluge lost port 58946 that way and
+# stayed down for six hours. Never abort: the other stacks must still come back.
+# But DO record the failure so the run reports it.
+start_stack() {
+  local user=$1; shift
+  if runuser -u "$user" -- docker compose "$@" up -d; then return 0; fi
+  echo "WARN: $user stack failed to start, retrying in 15s" >&2
+  sleep 15
+  if runuser -u "$user" -- docker compose "$@" up -d; then
+    echo "WARN: $user stack started only on retry" >&2
+    return 0
+  fi
+  echo "ERROR: $user stack failed to start after retry" >&2
+  return 1
+}
+
 finish() {
   rc=$?
-  runuser -u mediaman      -- docker compose "${MEDIA[@]}"     up -d || true
-  runuser -u homeassistant -- docker compose "${HASS[@]}"      up -d || true
-  runuser -u nextcloud     -- docker compose "${NEXTCLOUD[@]}" up -d || true
-  if [ "$rc" -eq 0 ]; then hc ""; else hc "/fail"; fi
+  up_rc=0
+  start_stack mediaman      "${MEDIA[@]}"     || up_rc=1
+  start_stack homeassistant "${HASS[@]}"      || up_rc=1
+  start_stack nextcloud     "${NEXTCLOUD[@]}" || up_rc=1
+
+  # A backup that succeeded but left a stack down is NOT a success. This was
+  # previously `|| true` per line, so a failed restart was invisible and
+  # healthchecks.io was told everything was fine.
+  if [ "$rc" -eq 0 ] && [ "$up_rc" -eq 0 ]; then hc ""; else hc "/fail"; fi
+  if [ "$rc" -eq 0 ] && [ "$up_rc" -ne 0 ]; then rc=1; fi
   exit "$rc"
 }
 trap finish EXIT

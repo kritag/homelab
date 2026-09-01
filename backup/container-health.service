@@ -1,0 +1,8 @@
+[Unit]
+Description=Check that all expected docker containers are running
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/container-health.sh

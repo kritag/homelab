@@ -12,6 +12,7 @@ Each stack gets its own Unix account, its own compose project, and its own `.env
 | `media/` | `mediaman` | *arr apps, Deluge behind VPN, Jellyfin/Emby/Plex, Heimdall, nginx |
 | `homeassistant/` | `homeassistant` | Home Assistant |
 | `nextcloud/` | `nextcloud` | Nextcloud, PostgreSQL, Redis |
+| `kept/` | `kept` | Kept — Google Keep style notes |
 
 The compose file lives in the user's home directory, so the project directory is `~` and the
 project name is the username. `docker compose` walks up parent directories, so it also works
@@ -51,6 +52,34 @@ echo ip_tables | sudo tee /etc/modules-load.d/ip_tables.conf
 
 Without the `modules-load.d` file it survives until the next reboot and then the container
 fails to start with iptables errors.
+
+### SELinux
+
+The host runs SELinux **Permissive**, and `/mnt/0_data` has no `security.selinux` extended
+attributes at all — everything on it is `unlabeled_t`. Docker runs with `--selinux-enabled`, so
+every container write to a bind mount raises an AVC denial. Nothing is blocked, but
+`setroubleshootd` analyses each denial and will peg a CPU core during anything write-heavy.
+
+`setroubleshoot-server` was removed. In Permissive mode it is pure overhead — it only produces
+human-readable reports about denials that were never enforced — so removing it weakens nothing.
+
+Bind-mounted directories are labelled with `semanage` + `restorecon`, not plain `chcon`, which
+records no rule and is undone by any future relabel:
+
+```bash
+sudo semanage fcontext -a -t container_file_t '/mnt/0_data/nextcloud(/.*)?'
+sudo restorecon -R /mnt/0_data/nextcloud
+```
+
+Same for `/home/nextcloud/html`, `/home/nextcloud/postgres`, `/home/homeassistant/config` and
+`/home/mediaman/docker-automatic-media-server`. The `/home/<user>` directories themselves stay
+`user_home_t` — only what containers actually touch is relabelled.
+
+Do **not** "fix" this by adding `:z`/`:Z` to compose volumes: Docker relabels the whole mount
+recursively on every container start, which on a large data directory stalls every restart
+including the nightly backup's stop/start cycle, and `:Z` breaks two services sharing one
+directory. Do **not** `audit2allow` either — the label is wrong, and a policy module papering
+over it is the worse fix.
 
 ### Storage mounts
 
@@ -122,6 +151,7 @@ IDs are allocated from 2020 upward, one per stack:
 | `media/` | `mediaman` | 2020:2020 |
 | `homeassistant/` | `homeassistant` | 2021:2021 |
 | `nextcloud/` | `nextcloud` | 2022:2022 |
+| `kept/` | `kept` | 2023:2023 |
 
 ```bash
 # media
@@ -139,13 +169,18 @@ sudo groupadd -g 2022 nextcloud
 sudo useradd -m -u 2022 -g 2022 -s /bin/bash nextcloud
 sudo usermod -aG docker nextcloud
 
-id mediaman; id homeassistant; id nextcloud      # confirm the numbers
+# kept
+sudo groupadd -g 2023 kept
+sudo useradd -m -u 2023 -g 2023 -s /bin/bash kept
+sudo usermod -aG docker kept
+
+id mediaman; id homeassistant; id nextcloud; id kept      # confirm the numbers
 ```
 
 If an ID is already taken, `groupadd`/`useradd` fail rather than silently picking another —
 fix the collision instead of changing the ID.
 
-Next stack gets 2023, and so on. Add it to the table.
+Next stack gets 2024, and so on. Add it to the table.
 
 ### Deploy the stack
 
@@ -176,6 +211,10 @@ mkdir -p ~/docker-automatic-media-server/deluge/config/{openvpn,wireguard}
 The container picks up whatever it finds there according to `VPN_CLIENT`. Those files hold
 credentials and private keys — they belong in backups, never in this repo.
 
+Note that `binhex/arch-delugevpn` **logs `VPN_USER` and `VPN_PASS` in plaintext** at info
+level on every start. Treat `docker compose logs deluge` as containing credentials, and rotate
+them if that output is ever pasted anywhere.
+
 ### homeassistant
 
 Only needs `TZ` in `.env` — the official image ignores `PUID`/`PGID` and runs as root inside
@@ -197,8 +236,8 @@ unlike the media stack, the data directories are chowned `33:33`, and the 2022 u
 the home directory and runs `docker compose`. This is the tradeoff for env-var-driven install:
 the admin account and database wiring live in the compose file, so the stack rebuilds
 unattended. `linuxserver/nextcloud` honours 2022 and tracks upstream just as closely, but has
-no automated install and serves self-signed HTTPS on 443, which doesn't fit the single
-`proxy_pass http://$upstream` block in the nginx config.
+no automated install and serves self-signed HTTPS on 443, which doesn't fit the shared
+`map $host $upstream` used by everything else.
 
 User data lives on the bulk disk, not in the home directory — `/home` is only 76G:
 
@@ -211,10 +250,16 @@ sudo chown 2022:2022 /home/nextcloud
 `NEXTCLOUD_DATA_DIR=/var/www/data` points the instance at the bind mount. There is no bind
 mount into `/home/nextcloud/data` — the real path is referenced directly.
 
-No TLS: access is over WireGuard, so the tunnel already encrypts. `OVERWRITEPROTOCOL=http`.
-The "accessing site insecurely via HTTP" and HSTS setup-check warnings are therefore expected
-and should not be "fixed". The real cost is that copy-to-clipboard and service workers don't
-work in the browser, and passkeys/WebAuthn are unavailable — TOTP is the usable second factor.
+**Do not pin `overwriteprotocol` or `overwritehost`.** They are deliberately absent from the
+compose file and deleted from `config.php`, so `X-Forwarded-Proto` decides the scheme per
+request and both `http://` and `https://` work correctly. With `OVERWRITEPROTOCOL=http` set,
+Nextcloud answers HTTPS requests with `Location: http://...` — silently downgrading TLS
+clients to plaintext and breaking the web UI through mixed-content blocking. `OVERWRITECLIURL`
+*is* set, because cron has no request to infer a scheme from.
+
+Note the ordering trap: `occ config:system:delete <key>` followed by `docker compose up -d`
+re-applies the value from the env var. Remove it from the compose file **first**, then delete,
+then confirm with `config:system:get`.
 
 Settings covered by a compose environment variable are re-applied by the entrypoint on
 container start and override the web UI. Change those in compose, not in Administration
@@ -233,6 +278,46 @@ docker exec -u www-data nextcloud php occ config:system:set default_phone_region
 Hour 21 is UTC — 23:00–03:00 local, chosen to clear the 04:00 backup so the heavy daily jobs
 don't fight it for I/O. Set a default quota before anyone connects a phone, or one client
 auto-uploading video can fill `/mnt/0_data` and take the media stack down with it.
+
+Long-running `occ` jobs survive an ssh disconnect without tmux by running detached inside the
+container, writing to a log on the bind mount:
+
+```bash
+docker exec -d -u www-data nextcloud \
+  sh -c 'php occ preview:generate-all > /var/www/data/preview.log 2>&1'
+sudo tail -f /mnt/0_data/nextcloud/preview.log
+```
+
+Delete those logs afterwards, or `files:scan` indexes them as user files.
+
+### kept
+
+[Kept](https://github.com/ericerkz/kept) — a self-hosted, Google Keep style notes app with
+checklists. Single container, SQLite, native iOS and Android apps, and a Google Keep Takeout
+importer. It honours `PUID`/`PGID`, so unlike Nextcloud the 2023 IDs apply to the data files.
+
+Published on host port **6868**, not its native 6767 — that collides with Bazarr. `PORT: 6767`
+stays as-is; only the left side of the port mapping changes.
+
+```bash
+sudo mkdir -p /home/kept/data
+sudo chown -R 2023:2023 /home/kept
+```
+
+Notes:
+
+- **Requires HTTPS.** Note creation calls `crypto.randomUUID()`, which browsers only expose in
+  a secure context. On plain HTTP the Close button hangs and nothing is ever saved — with no
+  error shown and no request in the server log, because the request is never sent. See **TLS
+  certificates** below.
+- `KEPT_CORS_ALLOW_ALL=1` is set because the native app shells use a different origin than the
+  web UI. Acceptable here: the instance is reachable only from the LAN and over WireGuard.
+- `KEPT_ALLOW_RESTORE` is deliberately unset — with it enabled, anyone holding an auth token
+  can overwrite the entire database from a backup file. Set it only while actually restoring.
+- Realtime collaboration uses a WebSocket at `/api/realtime`. The existing `location /` block
+  already forwards `Upgrade`/`Connection`, so no extra proxy config is needed.
+- The project moves fast — consider pinning a version tag rather than `:latest`, since the
+  nightly backup's `up -d` would otherwise upgrade it unattended.
 
 ## Filling in `.env`
 
@@ -258,14 +343,31 @@ auto-uploading video can fill `/mnt/0_data` and take the media stack down with i
 
 ## Hostnames instead of ports
 
-An nginx container fronts everything on port 80, mapping `<service>.<domain>` to host ports
-via a `map $host $upstream` block, with unmatched names falling through to Heimdall. The
+An nginx container fronts everything on ports 80 and 443, mapping `<service>.<domain>` to host
+ports via a `map $host $upstream` block, with unmatched names falling through to Heimdall. The
 actual config isn't in this repo — it's restored from backup.
+
+Port 443 needs **its own `server` block** in `services.conf`, reusing the same map. Without one,
+the linuxserver image's `default.conf` answers 443 with its bundled self-signed certificate and
+serves the "Welcome to our server" page. Every Nextcloud-style client app then prompts to trust
+a fingerprint, you accept, and it fails with "could not connect to server" — because after the
+prompt it reaches nginx's default vhost rather than the application. Two apps were nearly
+written off as buggy over this.
+
+The domain is `h.example.com`, a sub-label of a domain we actually own. An earlier setup used
+`saturn.io`, which we do **not** own: that made a real certificate impossible, and any client
+falling back to public DNS would have resolved our service names against a stranger's zone.
+
+The sub-label rather than the apex is deliberate. A Pi-hole wildcard on `example.com` would
+hijack `ving.example.com` and the apex from inside the house, needing a growing exception list,
+and a `*.example.com` private key sitting on this nginx could impersonate our public
+infrastructure. Flat names with one explicit Pi-hole entry per service would also work; the
+sub-label was chosen for less ongoing maintenance.
 
 Resolution is one wildcard record on the LAN DNS server, e.g. for Pi-hole v6:
 
 ```bash
-sudo pihole-FTL --config misc.dnsmasq_lines '["address=/<domain>/<server-ip>"]'
+sudo pihole-FTL --config misc.dnsmasq_lines '["address=/h.example.com/192.168.0.62"]'
 sudo systemctl restart pihole-FTL
 ```
 
@@ -276,14 +378,58 @@ Two things that cost me time:
 - Pick a suffix whose TLD is in the Public Suffix List. Firefox-based browsers send `.lan` and
   `.internal` to search instead of navigating, and you can't fix that per-device at scale.
 
+### TLS certificates
+
+A Let's Encrypt wildcard for `h.example.com` + `*.h.example.com`, issued by `acme.sh` over
+**DNS-01** against Cloudflare. Nothing is exposed to the internet and no permanent public DNS
+record exists — DNS-01 needs only a `_acme-challenge` TXT record, which acme.sh adds and
+removes during issuance. Resolution stays inside Pi-hole.
+
+```bash
+curl https://get.acme.sh | sh -s email=<you@example.com>
+acme.sh --set-default-ca --server letsencrypt
+
+export CF_Token="<Cloudflare token: Zone:Zone:Read + Zone:DNS:Edit, scoped to the zone>"
+acme.sh --issue --dns dns_cf -d h.example.com -d '*.h.example.com'
+
+KEYS=/home/mediaman/docker-automatic-media-server/reverse/config/keys
+acme.sh --install-cert -d h.example.com --ecc \
+  --key-file       "$KEYS/cert.key" \
+  --fullchain-file "$KEYS/cert.crt" \
+  --reloadcmd      "chown 2020:2020 $KEYS/cert.key $KEYS/cert.crt && docker exec reverse nginx -s reload"
+```
+
+Both names are needed — the wildcard does not cover the bare `h.example.com`. `--ecc` is needed
+on install because acme.sh issues ECDSA by default and stores it in a separate directory.
+Installing to `cert.crt`/`cert.key` means nginx needs no config change: it already points at
+`/config/keys/`.
+
+acme.sh installs its own cron entry and renews automatically, re-running that reloadcmd. It
+takes the renewal date from the CA's ARI endpoint, roughly 30 days before expiry.
+
+Why this matters beyond the browser warning — with a self-signed certificate, or none:
+
+- **Secure-context APIs are unavailable.** `crypto.randomUUID()` doesn't exist, so Kept can't
+  create notes at all. Nextcloud loses copy-to-clipboard, service workers and passkeys.
+- **iOS refuses CalDAV** without a trusted certificate.
+- **Android client apps** fail after the fingerprint prompt, per the 443 block note above.
+
+Two certificate traps that cost time:
+
+- The linuxserver image's stock certificate is `CN=*` with **no extensions at all** — no
+  `subjectAltName`. Modern clients ignore CN entirely and require a SAN, so it can never match
+  a hostname no matter what you tap "trust" on.
+- Verify with `openssl x509 -noout -dates -issuer -ext subjectAltName`, and by `curl` *without*
+  `-k`. A page loading is not evidence the certificate is right.
+
 ### Reaching these names remotely
 
 Remote access is WireGuard on the ASUS router (VPN → VPN Server → WireGuard), not on the
 server. Split tunnel: `AllowedIPs = 192.168.0.0/24,10.6.0.0/24`, endpoint
 `<router-ddns-name>:51820`, clients on `10.6.0.0/24`.
 
-Two changes are needed or `<service>.saturn.io` will not resolve over the tunnel, even though
-`192.168.0.62:<port>` works fine:
+Two changes are needed or `<service>.h.example.com` will not resolve over the tunnel, even
+though `192.168.0.62:<port>` works fine:
 
 **1. Pi-hole must answer the WireGuard subnet.** The router routes VPN clients without NAT, so
 queries arrive from `10.6.0.x` — a foreign subnet — and Pi-hole v6's default `LOCAL` listening
@@ -298,12 +444,12 @@ Safe, because the Pi has no port forward — only the LAN and VPN clients can re
 
 The symptom, if this is wrong: from a connected client,
 `curl -o /dev/null -w '%{http_code}' http://192.168.0.59/admin/` returns 302 — so routing is
-fine — but `dig @192.168.0.59 jellyfin.saturn.io` times out.
+fine — but `dig @192.168.0.59 jellyfin.h.example.com` times out.
 
 **2. Each client config must point at Pi-hole.** The router generates `DNS = 10.6.0.1`, which is
-the router itself; it resolves via its own WAN DNS, not Pi-hole, so it answers `*.saturn.io`
-from the real public zone. There is no DNS field on this firmware's WireGuard page, so edit
-every exported config:
+the router itself; it resolves via its own WAN DNS, not Pi-hole, so it answers these names from
+public DNS. There is no DNS field on this firmware's WireGuard page, so edit every exported
+config:
 
 ```bash
 sed -i 's/^DNS = .*/DNS = 192.168.0.59/' client.conf
@@ -311,8 +457,8 @@ qrencode -t ansiutf8 < client.conf     # scan straight from the terminal
 ```
 
 **Only that one address.** Listing a second resolver — `10.6.0.1,192.168.0.59` — gives working
-internet but breaks `*.saturn.io`: the router replies NXDOMAIN, which is a *valid* answer, so
-the client never fails over to Pi-hole. Same reason DHCP's "DNS Server 2" is left empty.
+internet but breaks the homelab names: the router replies NXDOMAIN, which is a *valid* answer,
+so the client never fails over to Pi-hole. Same reason DHCP's "DNS Server 2" is left empty.
 
 Pointing the router's own **WAN → DNS Server 1** at `192.168.0.59` also works and needs no
 client edits, but it was rejected deliberately: the router would then depend on Pi-hole to
@@ -327,13 +473,11 @@ no DNS at all.
 Testing notes:
 
 - Termux's `dig` ignores the Android system resolver and defaults to `8.8.8.8`, so a bare
-  `dig +short jellyfin.saturn.io` returns nothing even when everything works. Test in a browser,
-  or name the server: `dig @192.168.0.59 jellyfin.saturn.io`.
+  `dig +short jellyfin.h.example.com` returns nothing even when everything works. Test in a
+  browser, or name the server: `dig @192.168.0.59 jellyfin.h.example.com`.
 - Test from mobile data, never from the home wifi — hairpin NAT gives a misleading result.
-- Android **Private DNS** and browser **DoH** bypass the tunnel's resolver entirely. Both bite
-  here specifically because `saturn.io` is a real registered domain that resolves publicly, so
-  the failure is a confident wrong answer rather than an obvious error.
-~
+- Android **Private DNS** and browser **DoH** bypass the tunnel's resolver entirely, so the
+  names fail to resolve. Turn Private DNS off.
 
 ## Gotchas
 
@@ -341,18 +485,31 @@ Testing notes:
   own "Welcome to our server" page, so status codes look like success when routing is broken.
 - Docker's published ports bypass firewalld; `network_mode: host` does not. Host-networked
   services need an explicit `firewall-cmd --add-port`.
-- Emby is mapped to host port 8097 to avoid colliding with Jellyfin on 8096.
+- Emby is mapped to host port 8097 to avoid colliding with Jellyfin on 8096, and Kept to 6868
+  to avoid Bazarr on 6767.
 - nginx site configs go in `reverse/config/nginx/site-confs/`. Files in `reverse/config/` root
   are not read at all.
 - Nextcloud answers `/` with a 302 to `/login`, so a `curl` without `-L` returns a body with no
-  `<title>` — that's not a failure.
+  `<title>` — that's not a failure. A 400 from Nextcloud means the hostname isn't in
+  `trusted_domains`.
+- `/usr/local/sbin` is a **symlink to `/usr/local/bin`** on this Fedora. A script appearing at
+  both paths is one file, not two copies — do not "clean up" the duplicate.
+- systemd sets no `HOME` for a root service. `restic` needs it for its cache and `rclone` for
+  `/root/.config/rclone/rclone.conf`, so `homelab-backup.sh` exports `HOME=/root` explicitly.
+  Without it the timer fails in seconds while manual runs succeed, because `sudo` supplies
+  `HOME`. When a scheduled job "works when I run it by hand", check the systemd environment
+  first.
+- Docker does not always release a published port the instant a container stops, so an
+  immediate `up -d` can fail with "address already in use". `homelab-backup.sh` retries once
+  after 15 seconds; a container left in that failed state needs `docker compose rm -sf` and a
+  fresh `up -d`, because restarting reuses the broken network config.
 
 ## Backups
 
-See [`backup/`](backup/) — nightly `restic` to Jottacloud via `rclone`, stopping all three
-stacks first so the databases are consistent. Covers all three home directories: compose
-files, `.env`, VPN configs, nginx config, and all service appdata. Media libraries are not
-backed up.
+See [`backup/`](backup/) — nightly `restic` to Jottacloud via `rclone`, stopping all stacks
+first so the databases are consistent. Covers every stack home directory: compose files,
+`.env`, VPN configs, nginx config, TLS certificates, and all service appdata. Media libraries
+are not backed up.
 
 Nextcloud's user data (`/mnt/0_data/nextcloud`) is also excluded: every phone auto-uploads to
 Jottacloud independently, so backing it up would put a second copy of the same photos in the
@@ -362,8 +519,26 @@ The tradeoff to be aware of: anything created *directly* in Nextcloud rather tha
 from a phone — laptop uploads, scans, server-side albums — never passes through Jottacloud and
 so has no second copy anywhere.
 
+Kept's data (`/home/kept`) **is** backed up in full. It's SQLite, so the stack is stopped like
+the others, and unlike the photos none of it exists anywhere else.
+
 Stopping the Nextcloud stack gives PostgreSQL a clean shutdown, which is what makes a
 file-level copy of its data directory consistent. No `pg_dump` step is needed.
+
+A separate **hourly container health check** (`backup/container-health.sh`, run by
+`container-health.timer`) compares `docker compose config --services` against
+`ps --services --status running` for every stack and alerts on anything missing. It needs no
+hardcoded container list, so new services are covered automatically.
+
+That exists because the backup only looks at 04:00, and because a failed restart used to be
+invisible: `finish()` brought each stack up with `|| true`, so on 2026-09-01 Deluge failed to
+bind a port, stayed down for six hours, and the run still reported success. `finish()` now
+retries once and reports `/fail` if any stack is still down — a backup that succeeds but leaves
+a stack down is not a success.
+
+`/root/.acme.sh/` holds the ACME account key and the Cloudflare API token. It is deliberately
+**not** in the restic paths: a rebuild means re-issuing the certificate, which takes about a
+minute with a fresh token, and that avoids putting a live credential in the backup.
 
 Anything not in this repo — nginx config, `.env`, Home Assistant's `config/` — comes from
 there. Failures alert via healthchecks.io.

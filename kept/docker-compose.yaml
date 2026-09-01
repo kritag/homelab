@@ -1,0 +1,22 @@
+services:
+  kept:
+    image: ghcr.io/ericerkz/kept:latest
+    container_name: kept
+    restart: unless-stopped
+    ports:
+      - "6868:6767"
+    volumes:
+      - /home/kept/data:/app/data
+    environment:
+      NODE_ENV: production
+      PORT: 6767
+      SQLITE_PATH: /app/data/kept.sqlite
+      PUID: 2023
+      PGID: 2023
+      # Native app shells use a different origin than the web UI, so pinning
+      # CORS origins breaks them. Safe here: the instance is only reachable
+      # from the LAN and over WireGuard, never from the internet.
+      KEPT_CORS_ALLOW_ALL: 1
+      # KEPT_ALLOW_RESTORE deliberately unset — with it on, anyone holding an
+      # auth token can overwrite the whole database from a backup file.
+      # Set to 1 only while actually restoring, then remove and recreate.
