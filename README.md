@@ -13,6 +13,7 @@ Each stack gets its own Unix account, its own compose project, and its own `.env
 | `homeassistant/` | `homeassistant` | Home Assistant |
 | `nextcloud/` | `nextcloud` | Nextcloud, PostgreSQL, Redis |
 | `kept/` | `kept` | Kept — Google Keep style notes |
+| `immich/` | `immich` | Immich — photo library |
 
 The compose file lives in the user's home directory, so the project directory is `~` and the
 project name is the username. `docker compose` walks up parent directories, so it also works
@@ -87,7 +88,7 @@ Root and `/home` are xfs on LVM (`sda`). Two ext4 data disks carry the media:
 
 | Mount | Device | Role |
 |---|---|---|
-| `/mnt/0_data` | `sdb1` | Bulk storage — tv, movies, mma, torrent downloads, Nextcloud user data |
+| `/mnt/0_data` | `sdb1` | Bulk storage — tv, movies, mma, torrent downloads, the Immich photo library |
 | `/mnt/1_data` | `sdc1` (label `data`) | Smaller disk, near capacity — movies, torrent downloads |
 
 Mount by UUID, not device name — `/dev/sdX` ordering isn't stable across reboots. Get the
@@ -152,6 +153,7 @@ IDs are allocated from 2020 upward, one per stack:
 | `homeassistant/` | `homeassistant` | 2021:2021 |
 | `nextcloud/` | `nextcloud` | 2022:2022 |
 | `kept/` | `kept` | 2023:2023 |
+| `immich/` | `immich` | 2024:2024 |
 
 ```bash
 # media
@@ -174,13 +176,18 @@ sudo groupadd -g 2023 kept
 sudo useradd -m -u 2023 -g 2023 -s /bin/bash kept
 sudo usermod -aG docker kept
 
-id mediaman; id homeassistant; id nextcloud; id kept      # confirm the numbers
+# immich
+sudo groupadd -g 2024 immich
+sudo useradd -m -u 2024 -g 2024 -s /bin/bash immich
+sudo usermod -aG docker immich
+
+id mediaman; id homeassistant; id nextcloud; id kept; id immich   # confirm the numbers
 ```
 
 If an ID is already taken, `groupadd`/`useradd` fail rather than silently picking another —
 fix the collision instead of changing the ID.
 
-Next stack gets 2024, and so on. Add it to the table.
+Next stack gets 2025, and so on. Add it to the table.
 
 ### Deploy the stack
 
@@ -239,7 +246,10 @@ unattended. `linuxserver/nextcloud` honours 2022 and tracks upstream just as clo
 no automated install and serves self-signed HTTPS on 443, which doesn't fit the shared
 `map $host $upstream` used by everything else.
 
-User data lives on the bulk disk, not in the home directory — `/home` is only 76G:
+Photos are **not** in Nextcloud — they live in Immich, see below. What's left here is
+Documents, Notes, calendars and contacts, so the data directory is small (a few hundred KB at
+the time of writing). The bulk-disk layout is kept anyway, so putting large files back later
+needs no migration — `/home` is only 76G:
 
 ```bash
 sudo mkdir -p /mnt/0_data/nextcloud /home/nextcloud/{html,postgres}
@@ -318,6 +328,65 @@ Notes:
   already forwards `Upgrade`/`Connection`, so no extra proxy config is needed.
 - The project moves fast — consider pinning a version tag rather than `:latest`, since the
   nightly backup's `up -d` would otherwise upgrade it unattended.
+
+### immich
+
+[Immich](https://immich.app) — the photo library. Replaced Nextcloud's Photos and Memories,
+which were too slow to browse and had no usable Android widget. Published on host port 2283.
+
+Adapted from the [official compose file](https://github.com/immich-app/immich/releases/latest/download/docker-compose.yml),
+with three deliberate deviations:
+
+- **`immich-machine-learning` removed.** No face recognition or semantic search wanted. It
+  must ALSO be disabled in Administration → Settings → Machine Learning, or the server queues
+  jobs for a container that isn't there — on first import that was ~50,000 dead jobs competing
+  with the actual work. The Smart Search, Face Detection, Facial Recognition, Duplicate
+  Detection and OCR queues can then be cleared and paused.
+- **`restart: unless-stopped`** instead of upstream's `always`, so a docker daemon restart
+  during the nightly backup can't bring containers up while the stack is meant to be stopped.
+- **`IMMICH_VERSION` pinned to a release** rather than the moving `v3` tag. Immich ships
+  breaking changes between majors — 1.x → 2.x → 3.x within 2026 — so read the release notes
+  before bumping.
+
+The database image is **not** interchangeable with vanilla postgres: it carries the
+vectorchord/pgvectors extensions Immich requires. It and valkey are digest-pinned upstream;
+leave those alone.
+
+Immich has no `PUID`/`PGID` — it runs as root in the container, so the 2024 IDs are
+organisational, like Nextcloud's 2022.
+
+```bash
+sudo mkdir -p /mnt/0_data/immich /home/immich/postgres
+sudo chown -R 2024:2024 /home/immich /mnt/0_data/immich
+```
+
+`UPLOAD_LOCATION` points at the bulk disk (the library is ~190 GB); `DB_DATA_LOCATION` stays
+under `/home/immich` so restic covers it. Network shares are not supported for the database.
+
+Set the **storage template** before importing anything — "template changes only apply to new
+assets", so changing it later means a migration job over every file. `{{y}}/{{MM}}/{{filename}}`
+matches how the library was already laid out.
+
+Bulk import uses the official CLI, pointed at the container directly rather than through nginx
+so large videos don't hit the proxy's read timeout:
+
+```bash
+docker run --rm -v /path/to/photos:/import:ro \
+  -e IMMICH_INSTANCE_URL=http://192.168.0.62:2283/api \
+  -e IMMICH_API_KEY='<key>' \
+  ghcr.io/immich-app/immich-cli:latest upload --recursive --dry-run /import
+```
+
+Notes from doing it once:
+
+- Always `--dry-run` first; it reports the file count and byte total so you can reconcile
+  against the source before committing.
+- Mount the source `:ro` so the CLI cannot touch the originals.
+- Dedup is by file hash, so re-running is safe and overlapping folders don't double up. But
+  **editing a file changes its hash** — fixing EXIF after upload means deleting and re-uploading,
+  not re-scanning.
+- Don't use `--album`: it names albums after the containing folder, which for a `year/month`
+  tree gives 300 albums called "5".
 
 ## Filling in `.env`
 
@@ -511,19 +580,36 @@ first so the databases are consistent. Covers every stack home directory: compos
 `.env`, VPN configs, nginx config, TLS certificates, and all service appdata. Media libraries
 are not backed up.
 
-Nextcloud's user data (`/mnt/0_data/nextcloud`) is also excluded: every phone auto-uploads to
-Jottacloud independently, so backing it up would put a second copy of the same photos in the
-same provider. Only `/home/nextcloud` is backed up — PostgreSQL (accounts, groups, quotas,
-shares, file IDs), `config.php` and `.env`, which is the half that can't be reconstructed.
-The tradeoff to be aware of: anything created *directly* in Nextcloud rather than uploaded
-from a phone — laptop uploads, scans, server-side albums — never passes through Jottacloud and
-so has no second copy anywhere.
+**Photo libraries are deliberately excluded.** Every phone auto-uploads to Jottacloud
+independently, so backing them up would put a second copy of the same files into the same
+provider. That means `/mnt/0_data/immich` is not a restic path at all, and any future
+Nextcloud `Photos` folder is excluded by glob — so re-using Nextcloud for photos later can't
+silently start shipping hundreds of GB.
 
-Kept's data (`/home/kept`) **is** backed up in full. It's SQLite, so the stack is stopped like
-the others, and unlike the photos none of it exists anywhere else.
+What **is** backed up is the half that exists nowhere else:
 
-Stopping the Nextcloud stack gives PostgreSQL a clean shutdown, which is what makes a
-file-level copy of its data directory consistent. No `pg_dump` step is needed.
+| Path | Why |
+|---|---|
+| `/home/nextcloud` | PostgreSQL — accounts, groups, quotas, shares, calendars, contacts |
+| `/home/immich` | PostgreSQL — albums, corrected dates, all organisation |
+| `/home/kept` | SQLite notes |
+| `/mnt/0_data/nextcloud` | Documents and Notes — small, and Jottacloud does *not* have these |
+
+That last one matters: while Nextcloud held the photos it was excluded, and Jottacloud was the
+justification. Once the photos moved to Immich the only things left were Documents and Notes,
+which have no second copy anywhere — so the exclusion became a gap and the path was added.
+Photos and the regenerable preview cache stay excluded:
+
+```
+--exclude '/mnt/0_data/nextcloud/*/files/Photos'
+--exclude '/mnt/0_data/nextcloud/appdata_*/preview'
+```
+
+Stopping each stack gives PostgreSQL and SQLite a clean shutdown, which is what makes a
+file-level copy of their data directories consistent. No `pg_dump` step is needed.
+
+Immich's organisation — albums, every corrected date, every manual fix — lives only in its
+Postgres. The photos themselves can be re-downloaded from Jottacloud; that work cannot.
 
 A separate **hourly container health check** (`backup/container-health.sh`, run by
 `container-health.timer`) compares `docker compose config --services` against

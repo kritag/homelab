@@ -32,6 +32,8 @@ PIHOLE_LOCAL=/var/backups/pihole
 MEDIA=(-f /home/mediaman/docker-compose.yaml --project-directory /home/mediaman)
 HASS=(-f /home/homeassistant/docker-compose.yaml --project-directory /home/homeassistant)
 NEXTCLOUD=(-f /home/nextcloud/docker-compose.yaml --project-directory /home/nextcloud)
+KEPT=(-f /home/kept/docker-compose.yaml --project-directory /home/kept)
+IMMICH=(-f /home/immich/docker-compose.yaml --project-directory /home/immich)
 
 # healthchecks.io ping URL, e.g. https://hc-ping.com/<uuid>. Kept out of this
 # repo; absent file simply disables alerting.
@@ -64,6 +66,8 @@ finish() {
   start_stack mediaman      "${MEDIA[@]}"     || up_rc=1
   start_stack homeassistant "${HASS[@]}"      || up_rc=1
   start_stack nextcloud     "${NEXTCLOUD[@]}" || up_rc=1
+  start_stack kept          "${KEPT[@]}"      || up_rc=1
+  start_stack immich        "${IMMICH[@]}"    || up_rc=1
 
   # A backup that succeeded but left a stack down is NOT a success. This was
   # previously `|| true` per line, so a failed restart was invisible and
@@ -88,13 +92,25 @@ echo "Stopping stacks for a consistent snapshot..."
 runuser -u mediaman      -- docker compose "${MEDIA[@]}"     stop -t 30
 runuser -u homeassistant -- docker compose "${HASS[@]}"      stop -t 30
 runuser -u nextcloud     -- docker compose "${NEXTCLOUD[@]}" stop -t 30
+runuser -u kept          -- docker compose "${KEPT[@]}"      stop -t 30
+runuser -u immich        -- docker compose "${IMMICH[@]}"    stop -t 30
 
 echo "Backing up..."
-# /mnt/0_data/nextcloud (everyone's photos) is deliberately NOT backed up: every
-# phone auto-uploads to Jottacloud as well, so restic would push a second copy of
-# the same files into the same provider. /home/nextcloud is the irreplaceable half
-# — PostgreSQL (accounts, groups, quotas, shares, file IDs), config.php and .env.
-restic backup /home/mediaman /home/homeassistant /home/nextcloud "$PIHOLE_LOCAL" \
+# Photo libraries are deliberately NOT backed up: every phone auto-uploads to
+# Jottacloud independently, so restic would push a second copy of the same files
+# into the same provider. That covers /mnt/0_data/immich (the Immich library) and
+# any future Nextcloud Photos folder — excluded below so re-using Nextcloud for
+# photos later doesn't silently start backing up hundreds of GB.
+#
+# What IS backed up is the half that exists nowhere else:
+#   /home/nextcloud  PostgreSQL — accounts, groups, quotas, shares, calendars, contacts
+#   /home/immich     PostgreSQL — albums, corrected dates, all organisation
+#   /home/kept       SQLite notes
+#   /mnt/0_data/nextcloud  Documents and Notes (small; Jottacloud does NOT have these)
+restic backup /home/mediaman /home/homeassistant /home/nextcloud /home/kept /home/immich \
+  /mnt/0_data/nextcloud "$PIHOLE_LOCAL" \
+  --exclude '/mnt/0_data/nextcloud/*/files/Photos' \
+  --exclude '/mnt/0_data/nextcloud/appdata_*/preview' \
   --exclude '/home/mediaman/git' \
   --exclude "$APPDATA/jellyfin/config/metadata" \
   --exclude "$PLEX/Metadata" \
