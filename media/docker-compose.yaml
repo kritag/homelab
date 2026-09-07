@@ -26,6 +26,8 @@ services:
     restart: unless-stopped
     volumes:
       - /home/mediaman/docker-automatic-media-server/cleanuparr/config:/config
+  # TODO: delete this service once its remaining torrents have met
+  # their seeding obligations. Unregistered from Radarr/Sonarr/Cleanuparr.
   deluge:
     # Modprobe ip_tables to get it to work
     devices:
@@ -36,7 +38,7 @@ services:
     env_file: .env
     environment:
       - DEBUG=${DEBUG}
-      - ENABLE_PRIVOXY=${ENABLE_PRIVOXY}
+      - ENABLE_PRIVOXY=no
       - LAN_NETWORK=${LAN_NETWORK}
       - NAME_SERVERS=${NAME_SERVERS}
       - PGID=${PGID}
@@ -51,13 +53,50 @@ services:
     image: binhex/arch-delugevpn:latest
     ports:
       - 8112:8112
-      - 8118:8118
       - 58846:58846
       - 58946:58946
     restart: unless-stopped
     volumes:
       - /home/mediaman/docker-automatic-media-server/deluge/config:/config
-      - /mnt/0_data/torrents/downloads:/downloads
+      - /mnt/0_data/torrents:/downloads
+      - /mnt/1_data/torrents/downloads:/movie
+      - /etc/localtime:/etc/localtime:ro
+  qbittorrent:
+    # Modprobe ip_tables to get it to work
+    devices:
+      - /dev/net/tun
+    cap_add:
+      - NET_ADMIN
+    container_name: qbittorrent
+    env_file: .env
+    environment:
+      - DEBUG=${DEBUG}
+      - ENABLE_PRIVOXY=${ENABLE_PRIVOXY}
+      - LAN_NETWORK=${LAN_NETWORK}
+      - NAME_SERVERS=${NAME_SERVERS}
+      - PGID=${PGID}
+      - PUID=${PUID}
+      - STRICT_PORT_FORWARD=${STRICT_PORT_FORWARD}
+      - TZ=${TZ}
+      - UMASK=002
+      - VPN_ENABLED=${VPN_ENABLED}
+      - VPN_CLIENT=${VPN_CLIENT}
+      - VPN_PASS=${VPN_PASS}
+      - VPN_PROV=${VPN_PROV}
+      - VPN_USER=${VPN_USER}
+      # Must match BOTH sides of the published port below - binhex builds the
+      # container's iptables rules from this value.
+      - WEBUI_PORT=${QBIT_WEBUI_PORT}
+    image: binhex/arch-qbittorrentvpn:latest
+    ports:
+      - 8181:8181
+      - 8118:8118
+    restart: unless-stopped
+    volumes:
+      - /home/mediaman/docker-automatic-media-server/qbittorrent/config:/config
+      # Container paths are deliberately identical to the old deluge service so
+      # Radarr/Sonarr need no remote path mapping.
+      - /mnt/0_data/torrents:/downloads
       - /mnt/1_data/torrents/downloads:/movie
       - /etc/localtime:/etc/localtime:ro
   emby:
@@ -187,7 +226,7 @@ services:
       - /home/mediaman/docker-automatic-media-server/radarr/config:/config
       - /mnt/1_data/movies:/movies
       - /mnt/0_data/movies:/movies1
-      - /mnt/0_data/torrents/downloads:/downloads
+      - /mnt/0_data/torrents:/downloads
   recyclarr:
     image: ghcr.io/recyclarr/recyclarr:8
     container_name: recyclarr
@@ -238,4 +277,4 @@ services:
     volumes:
       - /home/mediaman/docker-automatic-media-server/sonarr/config:/config
       - /mnt/0_data/tv:/tv
-      - /mnt/0_data/torrents/downloads:/downloads
+      - /mnt/0_data/torrents:/downloads
