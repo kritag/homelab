@@ -13,7 +13,7 @@ Next stack gets 2025.
 
 | Dir              | User            | UID:GID   | Contents                                                                |
 | ---------------- | --------------- | --------- | ----------------------------------------------------------------------- |
-| `media/`         | `mediaman`      | 2020:2020 | \*arr apps, qBittorrent behind VPN, Jellyfin/Emby/Plex, Heimdall, nginx |
+| `media/`         | `mediaman`      | 2020:2020 | \*arr apps, qBittorrent behind VPN, Jellyfin/Plex, Heimdall, nginx |
 | `homeassistant/` | `homeassistant` | 2021:2021 | Home Assistant                                                          |
 | `nextcloud/`     | `nextcloud`     | 2022:2022 | Nextcloud, PostgreSQL, Redis, cron                                      |
 | `kept/`          | `kept`          | 2023:2023 | Kept — notes                                                            |
@@ -120,7 +120,6 @@ mkdir -p ~/docker-automatic-media-server/qbittorrent/config/{openvpn,wireguard}
   torrent** (not Remove), and **Remove Completed** on in Radarr/Sonarr.
   Removing at 0 min in the client instead is a race — if the torrent vanishes
   before the ~1 min queue scan, the files never import.
-- Emby is on host 8097 (Jellyfin has 8096); Kept on 6868 (Bazarr has 6767).
 
 **homeassistant** — only `TZ` in `.env`; the image ignores PUID/PGID and runs as
 root. HTTP and proxy settings are in the UI (Settings → System → Network); a
@@ -207,7 +206,7 @@ docker run --rm -v /path/to/photos:/import:ro \
 
 Prowlarr (indexers + FlareSolverr) → Sonarr/Radarr (qBittorrent client, root
 folders, Prowlarr) → API keys into `.env` then `docker compose up -d recyclarr`
-→ Jellyfin/Emby/Plex libraries → Seerr → Bazarr.
+→ Jellyfin/Plex libraries → Seerr → Bazarr.
 
 ## Hostnames and TLS
 

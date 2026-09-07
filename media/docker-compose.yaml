@@ -64,22 +64,6 @@ services:
       - /mnt/0_data/torrents:/downloads
       - /mnt/1_data/torrents/downloads:/movie
       - /etc/localtime:/etc/localtime:ro
-  emby:
-    container_name: emby
-    environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
-      - TZ=${TZ}
-    image: lscr.io/linuxserver/emby:latest
-    ports:
-      - 8920:8920/tcp
-      - 8097:8096/tcp
-    restart: unless-stopped
-    volumes:
-      - /home/mediaman/docker-automatic-media-server/emby/config:/config
-      - /mnt/0_data/tv:/data/tv
-      - /mnt/1_data/movies:/data/movies
-      - /mnt/0_data/movies:/data/movies1
   flaresolverr:
     image: ghcr.io/flaresolverr/flaresolverr:latest
     container_name: flaresolverr
