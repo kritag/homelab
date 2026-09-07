@@ -26,41 +26,6 @@ services:
     restart: unless-stopped
     volumes:
       - /home/mediaman/docker-automatic-media-server/cleanuparr/config:/config
-  # TODO: delete this service once its remaining torrents have met
-  # their seeding obligations. Unregistered from Radarr/Sonarr/Cleanuparr.
-  deluge:
-    # Modprobe ip_tables to get it to work
-    devices:
-      - /dev/net/tun
-    cap_add:
-      - NET_ADMIN
-    container_name: deluge
-    env_file: .env
-    environment:
-      - DEBUG=${DEBUG}
-      - ENABLE_PRIVOXY=no
-      - LAN_NETWORK=${LAN_NETWORK}
-      - NAME_SERVERS=${NAME_SERVERS}
-      - PGID=${PGID}
-      - PUID=${PUID}
-      - STRICT_PORT_FORWARD=${STRICT_PORT_FORWARD}
-      - TZ=${TZ}
-      - VPN_ENABLED=${VPN_ENABLED}
-      - VPN_CLIENT=${VPN_CLIENT}
-      - VPN_PASS=${VPN_PASS}
-      - VPN_PROV=${VPN_PROV}
-      - VPN_USER=${VPN_USER}
-    image: binhex/arch-delugevpn:latest
-    ports:
-      - 8112:8112
-      - 58846:58846
-      - 58946:58946
-    restart: unless-stopped
-    volumes:
-      - /home/mediaman/docker-automatic-media-server/deluge/config:/config
-      - /mnt/0_data/torrents:/downloads
-      - /mnt/1_data/torrents/downloads:/movie
-      - /etc/localtime:/etc/localtime:ro
   qbittorrent:
     # Modprobe ip_tables to get it to work
     devices:
