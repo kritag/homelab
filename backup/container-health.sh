@@ -8,6 +8,8 @@
 # Installed at /usr/local/sbin/container-health.sh, run by container-health.timer.
 set -uo pipefail
 cd /
+# The nightly backup stops every stack deliberately; do not alert on that.
+systemctl is-active --quiet homelab-backup.service && exit 0
 
 HC="$(cat /root/.healthchecks-containers-url 2>/dev/null || true)"
 hc() { [ -n "$HC" ] && curl -fsS -m 10 --retry 3 "${HC}${1}" >/dev/null || true; }
@@ -17,6 +19,8 @@ STACKS=(
   "mediaman:/home/mediaman/docker-compose.yaml:/home/mediaman"
   "homeassistant:/home/homeassistant/docker-compose.yaml:/home/homeassistant"
   "nextcloud:/home/nextcloud/docker-compose.yaml:/home/nextcloud"
+  "kept:/home/kept/docker-compose.yaml:/home/kept"
+  "immich:/home/immich/docker-compose.yaml:/home/immich"
 )
 
 # Services that are expected to be absent (one-shot jobs, deliberately stopped).
