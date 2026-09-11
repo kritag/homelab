@@ -21,6 +21,7 @@ STACKS=(
   "nextcloud:/home/nextcloud/docker-compose.yaml:/home/nextcloud"
   "kept:/home/kept/docker-compose.yaml:/home/kept"
   "immich:/home/immich/docker-compose.yaml:/home/immich"
+  "invidious:/home/invidious/docker-compose.yaml:/home/invidious"
 )
 
 # Services that are expected to be absent (one-shot jobs, deliberately stopped).
@@ -31,7 +32,7 @@ problems=0
 report=""
 
 for entry in "${STACKS[@]}"; do
-  IFS=: read -r user file dir <<< "$entry"
+  IFS=: read -r user file dir <<<"$entry"
   args=(-f "$file" --project-directory "$dir")
 
   expected=$(runuser -u "$user" -- docker compose "${args[@]}" config --services 2>/dev/null | sort)

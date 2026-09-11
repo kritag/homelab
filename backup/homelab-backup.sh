@@ -34,6 +34,7 @@ HASS=(-f /home/homeassistant/docker-compose.yaml --project-directory /home/homea
 NEXTCLOUD=(-f /home/nextcloud/docker-compose.yaml --project-directory /home/nextcloud)
 KEPT=(-f /home/kept/docker-compose.yaml --project-directory /home/kept)
 IMMICH=(-f /home/immich/docker-compose.yaml --project-directory /home/immich)
+INVIDIOUS=(-f /home/invidious/docker-compose.yaml --project-directory /home/invidious)
 
 # healthchecks.io ping URL, e.g. https://hc-ping.com/<uuid>. Kept out of this
 # repo; absent file simply disables alerting.
@@ -48,7 +49,8 @@ hc() { [ -n "$HC_URL" ] && curl -fsS -m 10 --retry 3 "${HC_URL}${1}" >/dev/null 
 # stayed down for six hours. Never abort: the other stacks must still come back.
 # But DO record the failure so the run reports it.
 start_stack() {
-  local user=$1; shift
+  local user=$1
+  shift
   if runuser -u "$user" -- docker compose "$@" up -d; then return 0; fi
   echo "WARN: $user stack failed to start, retrying in 15s" >&2
   sleep 15
@@ -63,11 +65,12 @@ start_stack() {
 finish() {
   rc=$?
   up_rc=0
-  start_stack mediaman      "${MEDIA[@]}"     || up_rc=1
-  start_stack homeassistant "${HASS[@]}"      || up_rc=1
-  start_stack nextcloud     "${NEXTCLOUD[@]}" || up_rc=1
-  start_stack kept          "${KEPT[@]}"      || up_rc=1
-  start_stack immich        "${IMMICH[@]}"    || up_rc=1
+  start_stack mediaman "${MEDIA[@]}" || up_rc=1
+  start_stack homeassistant "${HASS[@]}" || up_rc=1
+  start_stack nextcloud "${NEXTCLOUD[@]}" || up_rc=1
+  start_stack kept "${KEPT[@]}" || up_rc=1
+  start_stack immich "${IMMICH[@]}" || up_rc=1
+  start_stack invidious "${INVIDIOUS[@]}" || up_rc=1
 
   # A backup that succeeded but left a stack down is NOT a success. This was
   # previously `|| true` per line, so a failed restart was invisible and
@@ -86,14 +89,18 @@ pihole_rc=0
 echo "Pulling Pi-hole teleporter archives..."
 mkdir -p "$PIHOLE_LOCAL"
 rsync -a --delete -e 'ssh -o BatchMode=yes -o ConnectTimeout=10' \
-  "$PIHOLE_REMOTE" "$PIHOLE_LOCAL/" || { pihole_rc=1; echo "WARN: Pi-hole pull failed"; }
+  "$PIHOLE_REMOTE" "$PIHOLE_LOCAL/" || {
+  pihole_rc=1
+  echo "WARN: Pi-hole pull failed"
+}
 
 echo "Stopping stacks for a consistent snapshot..."
-runuser -u mediaman      -- docker compose "${MEDIA[@]}"     stop -t 30
-runuser -u homeassistant -- docker compose "${HASS[@]}"      stop -t 30
-runuser -u nextcloud     -- docker compose "${NEXTCLOUD[@]}" stop -t 30
-runuser -u kept          -- docker compose "${KEPT[@]}"      stop -t 30
-runuser -u immich        -- docker compose "${IMMICH[@]}"    stop -t 30
+runuser -u mediaman -- docker compose "${MEDIA[@]}" stop -t 30
+runuser -u homeassistant -- docker compose "${HASS[@]}" stop -t 30
+runuser -u nextcloud -- docker compose "${NEXTCLOUD[@]}" stop -t 30
+runuser -u kept -- docker compose "${KEPT[@]}" stop -t 30
+runuser -u immich -- docker compose "${IMMICH[@]}" stop -t 30
+runuser -u invidious -- docker compose "${INVIDIOUS[@]}" stop -t 30
 
 echo "Backing up..."
 # Photo libraries are deliberately NOT backed up: every phone auto-uploads to
@@ -107,7 +114,7 @@ echo "Backing up..."
 #   /home/immich     PostgreSQL — albums, corrected dates, all organisation
 #   /home/kept       SQLite notes
 #   /mnt/0_data/nextcloud  Documents and Notes (small; Jottacloud does NOT have these)
-restic backup /home/mediaman /home/homeassistant /home/nextcloud /home/kept /home/immich \
+restic backup /home/mediaman /home/homeassistant /home/nextcloud /home/kept /home/immich /home/invidious/ \
   /mnt/0_data/nextcloud "$PIHOLE_LOCAL" \
   --exclude '/mnt/0_data/nextcloud/*/files/Photos' \
   --exclude '/mnt/0_data/nextcloud/appdata_*/preview' \
