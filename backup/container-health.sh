@@ -9,7 +9,10 @@
 set -uo pipefail
 cd /
 # The nightly backup stops every stack deliberately; do not alert on that.
-systemctl is-active --quiet homelab-backup.service && exit 0
+# Type=oneshot units report "activating" while running, not "active".
+case "$(systemctl is-active homelab-backup.service)" in
+  active|activating) exit 0 ;;
+esac
 
 HC="$(cat /root/.healthchecks-containers-url 2>/dev/null || true)"
 hc() { [ -n "$HC" ] && curl -fsS -m 10 --retry 3 "${HC}${1}" >/dev/null || true; }
