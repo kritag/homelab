@@ -1,0 +1,9 @@
+[Unit]
+Description=Pull new images and update docker stacks
+After=docker.service network-online.target homelab-backup.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/homelab-update.sh

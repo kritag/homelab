@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily docker stack update
+
+[Timer]
+OnCalendar=05:30
+Persistent=true
+RandomizedDelaySec=10m
+
+[Install]
+WantedBy=timers.target

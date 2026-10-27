@@ -167,3 +167,24 @@ Nothing, currently. The Pi-hole config is included via the nightly teleporter pu
 What's still worth knowing: `prune` is the step most likely to fail on a flaky upload, and if it
 fails repeatedly the repo grows while snapshots look fine. The healthchecks alert catches that
 now, since a failed prune fails the run.
+
+## Daily updates
+
+`homelab-update.timer` runs at 05:30, after the 04:00 backup. For each stack it
+runs `docker compose pull` then `up -d --remove-orphans`, then prunes dangling
+images. Unchanged stacks are a no-op. It skips if the backup is still running.
+
+Version pins (Immich's `.env`, Nextcloud's image tags) still apply, so majors
+only move when you edit them.
+
+```bash
+sudo install -m 700 backup/homelab-update.sh /usr/local/sbin/homelab-update.sh
+sudo install -m 644 backup/homelab-update.service backup/homelab-update.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now homelab-update.timer
+systemctl list-timers homelab-update.timer
+sudo systemctl start homelab-update.service   # test run
+```
+
+Optional: put a healthchecks.io ping URL in `/root/.healthchecks-update-url`
+(root-only, same pattern as the backup's) to be alerted when a run fails.
